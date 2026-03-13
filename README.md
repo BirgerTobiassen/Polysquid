@@ -22,7 +22,7 @@ Polysquid is a Python-based tool for managing multiple Squid proxy services usin
    ```bash
    sudo ./install.sh
    ```
-   This sets up a systemd timer to check for updates every minute and redeploy if `services.yaml` changes.
+   This clones the repository to `/opt/polysquid`, sets up systemd services and timers for automated updates (checking every 5 minutes), copies the update script to `/usr/local/bin/`, and configures log rotation for update logs.
 
 3. Alternatively, run manually:
    ```bash
@@ -50,9 +50,33 @@ services:
 ## Usage
 
 - **Manual Deployment**: Run `python3 polysquid.py` to deploy/update services based on `services.yaml`.
-- **Automated**: The install script sets up a service that checks Git every minute for changes to `services.yaml` and runs the script automatically.
-- **Logs**: Check systemd logs with `journalctl -u polysquid-update.service`.
+- **Automated**: The install script sets up a service that checks Git every 5 minutes for changes to `services.yaml` and runs the script automatically.
+- **Logs**: Check systemd logs with `journalctl -u polysquid-update.service`. Persistent logs are written to `/var/log/polysquid-update.log` when updates are detected.
 - **Status**: Use `systemctl status polysquid-update.timer` to monitor the timer.
+
+## Advanced Usage
+
+### Custom Docker Image
+By default, Polysquid uses `ubuntu/squid:6.13-25.04_beta`. To use a custom image, set the `POLYSQUID_IMAGE` environment variable before running:
+```bash
+export POLYSQUID_IMAGE="your/custom:squid-image"
+python3 polysquid.py
+```
+For automated updates, set it in the systemd service file or globally.
+
+### Environment Variables
+- `POLYSQUID_IMAGE`: Override the default Squid Docker image.
+
+### Customizing Timer Intervals
+Edit `install.sh` to change `TIMER_INTERVAL` (e.g., to `"hourly"` or `"daily"`). Reinstall after changes.
+
+### Managing Multiple Configurations
+- Keep multiple `services.yaml` files and switch by renaming.
+- Use Git branches for different environments (e.g., dev/staging/prod).
+
+### Debugging
+- Enable verbose logging in `polysquid.py` by modifying the logging level.
+- Test configs with `python3 -c "import yaml; print(yaml.safe_load(open('services.yaml')))"`.
 
 ## Requirements
 
@@ -76,6 +100,3 @@ services:
 - Validate `services.yaml` syntax with `python3 -c "import yaml; yaml.safe_load(open('services.yaml'))"`.
 - For permission issues, run as root or ensure sudo is configured.
 
-## License
-
-[Add your license here, e.g., MIT]
