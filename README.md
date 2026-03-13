@@ -54,30 +54,6 @@ services:
 - **Logs**: Check systemd logs with `journalctl -u polysquid-update.service`. Persistent logs are written to `/var/log/polysquid-update.log` when updates are detected.
 - **Status**: Use `systemctl status polysquid-update.timer` to monitor the timer.
 
-## Advanced Usage
-
-### Custom Docker Image
-By default, Polysquid uses `ubuntu/squid:6.13-25.04_beta`. To use a custom image, set the `POLYSQUID_IMAGE` environment variable before running:
-```bash
-export POLYSQUID_IMAGE="your/custom:squid-image"
-python3 polysquid.py
-```
-For automated updates, set it in the systemd service file or globally.
-
-### Environment Variables
-- `POLYSQUID_IMAGE`: Override the default Squid Docker image.
-
-### Customizing Timer Intervals
-Edit `install.sh` to change `TIMER_INTERVAL` (e.g., to `"hourly"` or `"daily"`). Reinstall after changes.
-
-### Managing Multiple Configurations
-- Keep multiple `services.yaml` files and switch by renaming.
-- Use Git branches for different environments (e.g., dev/staging/prod).
-
-### Debugging
-- Enable verbose logging in `polysquid.py` by modifying the logging level.
-- Test configs with `python3 -c "import yaml; print(yaml.safe_load(open('services.yaml')))"`.
-
 ## Requirements
 
 - Python 3 with `pyyaml`
