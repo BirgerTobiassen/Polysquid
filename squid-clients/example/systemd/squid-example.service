@@ -1,0 +1,18 @@
+[Unit]
+Description=Squid Docker instance for Example Service
+After=docker.service network-online.target
+
+[Service]
+Type=simple
+Restart=no
+
+ExecStart=/usr/bin/docker run \
+  --name squid_example \
+  -v /opt/polysquid/squid-clients/example/conf/squid.conf:/etc/squid/squid.conf \
+  -v /opt/polysquid/squid-clients/example/logs:/var/log/squid \
+  -v /opt/polysquid/squid-clients/example/cache:/var/spool/squid \
+  -p 3128:3128 \
+  ubuntu/squid:6.13-25.04_beta
+
+ExecStop=/usr/bin/docker stop squid_example
+ExecStopPost=/usr/bin/docker rm -f squid_example

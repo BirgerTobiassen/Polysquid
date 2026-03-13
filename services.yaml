@@ -1,0 +1,27 @@
+services:
+# Example service showing all optional fields (disabled by default)
+- name: "Example Service"
+  port: 3127 # Port number to listen on
+  enabled: false  # Set to true to enable this service
+  on_calendar: "Mon..Fri 08:00..18:00"  # Optional: systemd OnCalendar format for start/stop timers (e.g., "Mon..Fri 08:00..18:00" for weekdays 8am-6pm)
+  allowed_ips:  # Optional: List of source IPs/CIDRs allowed to connect (default: all IPs allowed)
+    - 192.168.1.0/24
+    - 10.0.0.1
+  whitelist:  # Optional: List of destination domains allowed (takes precedence over blacklist)
+    - .example.com
+    - .trusted.org
+  blacklist:  # Optional: List of destination domains denied
+    - .bad.com
+    - .malware.net
+- name: "GR1"
+  port: 3128
+  enabled: true
+  on_calendar: "Mon..Fri 00:07..18:00"
+- name: "Test gruppe 2"
+  port: 3129
+  enabled: false
+  on_calendar: "Mon,Tue,Wed,Thu,Fri,Sat,Sun 00:00..23:59"
+- name: "Flere dager øæåe"
+  port: 3130
+  enabled: true
+  on_calendar: "Mon,Tue,Wed,Sat,Sun 00:00..23:59"

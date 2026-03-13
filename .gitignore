@@ -1,0 +1,20 @@
+# Ignore generated Squid client directories
+squid-clients/*
+!squid-clients/example/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs and cache (if any local copies)
+*.log
+cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.swp
