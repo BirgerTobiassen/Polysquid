@@ -30,32 +30,8 @@ else
 fi
 chown -R root:root "$REPO_DIR"
 
-# Create the update script
-cat > "$UPDATE_SCRIPT" << 'EOF'
-#!/bin/bash
-
-REPO_DIR="/opt/polysquid"
-
-cd "$REPO_DIR" || exit 1
-
-# Get current hash of services.yaml
-old_hash=$(git rev-parse HEAD:services.yaml 2>/dev/null || echo "")
-
-# Pull latest changes
-git pull --quiet
-
-# Get new hash
-new_hash=$(git rev-parse HEAD:services.yaml 2>/dev/null || echo "")
-
-# If services.yaml changed, run polysquid.py
-if [ "$old_hash" != "$new_hash" ] && [ -n "$new_hash" ]; then
-    echo "$(date): services.yaml updated, running polysquid.py"
-    python3 polysquid.py
-else
-    echo "$(date): No changes to services.yaml"
-fi
-EOF
-
+# Copy the update script and set mode
+cp "$REPO_DIR/polysquid-update.sh" "$UPDATE_SCRIPT"
 chmod +x "$UPDATE_SCRIPT"
 
 # Create systemd service
