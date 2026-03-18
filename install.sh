@@ -10,6 +10,7 @@ set -e
 REPO_DIR="/opt/polysquid"
 REPO_URL="git@github.com:BirgerTobiassen/Polysquid.git"
 SERVICE_NAME="polysquid-update"
+UPDATE_SCRIPT="/usr/local/bin/polysquid-update.sh"
 TIMER_INTERVAL="*-*-* *:0/5:00"  # Every 5 minutes
 
 # Check if running as root
@@ -29,8 +30,33 @@ else
 fi
 chown -R root:root "$REPO_DIR"
 
-# Update script
-chmod +x "$REPO_DIR/polysquid-update.sh"
+# Create the update script
+cat > "$UPDATE_SCRIPT" << 'EOF'
+#!/bin/bash
+
+REPO_DIR="/opt/polysquid"
+
+cd "$REPO_DIR" || exit 1
+
+# Get current hash of services.yaml
+old_hash=$(git rev-parse HEAD:services.yaml 2>/dev/null || echo "")
+
+# Pull latest changes
+git pull --quiet
+
+# Get new hash
+new_hash=$(git rev-parse HEAD:services.yaml 2>/dev/null || echo "")
+
+# If services.yaml changed, run polysquid.py
+if [ "$old_hash" != "$new_hash" ] && [ -n "$new_hash" ]; then
+    echo "$(date): services.yaml updated, running polysquid.py"
+    python3 polysquid.py
+else
+    echo "$(date): No changes to services.yaml"
+fi
+EOF
+
+chmod +x "$UPDATE_SCRIPT"
 
 # Create systemd service
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -41,7 +67,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=$REPO_DIR/polysquid-update.sh
+ExecStart=$UPDATE_SCRIPT
 User=root
 EOF
 
