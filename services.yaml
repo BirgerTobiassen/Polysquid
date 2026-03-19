@@ -1,6 +1,6 @@
 services:
 - name: "TEST1"
-  port: 3131 # Port number to listen on
+  port: 3128 # Port number to listen on
   enabled: true  # Set to true to enable this service
   on_calendar: "Mon..Fri 08:00..21:00"  # Optional: systemd OnCalendar format for start/stop timers (e.g., "Mon..Fri 08:00..18:00" for weekdays 8am-6pm)
   allowed_ips:  # Optional: List of source IPs/CIDRs allowed to connect (default: all IPs allowed)
@@ -12,3 +12,34 @@ services:
   blacklist:  # Optional: List of destination domains denied
     - .bad.com
     - .malware.net
+
+- name: "TEST2"
+  port: 3129
+  enabled: true
+  whitelist:
+    - shared.lists.whitelist1
+    - shared.lists.whitelist2
+  blacklist:
+    - shared.lists.blacklist1
+    - .phishing.com
+    - .scam.net
+
+- name: "TEST3"
+  port: 3130
+  enabled: true  # This service is currently enabled
+  on_calendar: shared.calendars.off_hours  # Use shared calendar for off hours
+
+shared:
+  lists: 
+    whitelist1:
+      - .example.com
+      - .trusted.org
+    blacklist1:
+      - .bad.com
+      - .malware.net
+    whitelist2:
+      - .good.com
+      - .secure.net
+  calendars:
+    work_hours: "Mon..Fri 08:00..18:00"
+    off_hours: "Mon..Fri 18:00..08:00, Sat..Sun 00:00..23:59:59"
