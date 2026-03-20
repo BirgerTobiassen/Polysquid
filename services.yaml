@@ -19,10 +19,12 @@ services:
   whitelist:
     - shared.lists.whitelist1
     - shared.lists.whitelist2
+    - testlist1
   blacklist:
     - shared.lists.blacklist1
     - .phishing.com
     - .scam.net
+    - testlist2
 
 - name: "TEST3"
   port: 3130
@@ -40,6 +42,12 @@ shared:
     whitelist2:
       - .good.com
       - .secure.net
+    testlist1:
+      - .nrk.no
+      - .fremover.no
+    testlist2:
+      - .dagbladet.no
+      - .nordlys.no
   calendars:
     work_hours: "Mon..Fri 08:00..18:00"
     off_hours: "Mon..Fri 18:00..08:00, Sat..Sun 00:00..23:59:59"
