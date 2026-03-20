@@ -264,7 +264,7 @@ def validate_service(service: Dict, shared: Dict) -> Dict:
     }
 
 
-def generate_squid_conf(conf_path: Path, allowed_ips: List[str], whitelist: List[str], blacklist: List[str]) -> None:
+def generate_squid_conf(conf_path: Path, allowed_ips: List[str], whitelist: List[str], blacklist: List[str]) -> bool:
     """
     Build squid.conf with proper ordering:
     - If whitelist provided: only allow those domains (whitelist takes precedence over blacklist).
@@ -300,7 +300,13 @@ def generate_squid_conf(conf_path: Path, allowed_ips: List[str], whitelist: List
         lines.append("http_access allow allowed_ips")
     lines.append("http_access deny all")
 
-    conf_path.write_text("\n".join(lines))
+    new_content = "\n".join(lines)
+    if conf_path.exists() and conf_path.read_text() == new_content:
+        return False
+    conf_path.write_text(new_content)
+    return True
+
+
 def write_systemd_units(
     base_dir: Path,
     systemd_dir: Path,
@@ -521,7 +527,13 @@ def main():
         run(SUDO + ["chown", "-R", "13:13", str(cache_dir)], ignore_err=True)
 
         # squid.conf
-        generate_squid_conf(conf_dir / "squid.conf", allowed_ips, whitelist, blacklist)
+        conf_changed = generate_squid_conf(conf_dir / "squid.conf", allowed_ips, whitelist, blacklist)
+        if conf_changed:
+            # Signal running container to reload config without restart (squid -k reconfigure).
+            r = run(SUDO + ["systemctl", "is-active", "--quiet", f"squid-{safe_name}.service"])
+            if r.returncode == 0:
+                run(SUDO + ["docker", "kill", "-s", "HUP", f"squid_{safe_name}"], ignore_err=True)
+                log.info(f"Config changed for {name}: sent SIGHUP to reload")
 
         # Systemd + logrotate files
         service_file, start_timer_file, stop_service_file, stop_timer_file, logrotate_file = write_systemd_units(
