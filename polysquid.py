@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import yaml
 
@@ -172,76 +172,55 @@ def parse_calendar_ranges(calendar: str) -> Tuple[List[str], List[str]]:
     return start_specs, stop_specs
 
 
-def _parse_clock(value: str):
-    for fmt in ("%H:%M:%S", "%H:%M"):
-        try:
-            return datetime.strptime(value, fmt).time()
-        except ValueError:
-            continue
+def _next_elapse(spec: str) -> Optional[datetime]:
+    """
+    Return the next elapse time (local) for a systemd OnCalendar spec by
+    calling systemd-analyze. Returns None if unavailable or no future trigger.
+    """
+    try:
+        result = subprocess.run(
+            ["systemd-analyze", "calendar", spec],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("Next elapse:"):
+                raw = stripped.split(":", 1)[1].strip()
+                # Format: "Mon 2026-03-23 08:00:00 CET" — drop trailing tz token
+                parts = raw.split()
+                if len(parts) >= 3:
+                    return datetime.strptime(f"{parts[0]} {parts[1]} {parts[2]}", "%a %Y-%m-%d %H:%M:%S")
+    except Exception:
+        pass
     return None
-
-
-def _expand_days(days_spec: str) -> List[int]:
-    day_map = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
-    if not days_spec:
-        return list(range(7))
-    if ".." in days_spec:
-        start_name, end_name = [d.strip()[:3] for d in days_spec.split("..", 1)]
-        if start_name not in day_map or end_name not in day_map:
-            return []
-        start_idx = day_map[start_name]
-        end_idx = day_map[end_name]
-        if start_idx <= end_idx:
-            return list(range(start_idx, end_idx + 1))
-        return list(range(start_idx, 7)) + list(range(0, end_idx + 1))
-    single = days_spec.strip()[:3]
-    if single not in day_map:
-        return []
-    return [day_map[single]]
 
 
 def is_service_active_now(calendar: str) -> bool:
     """
-    Return True when current local time falls inside any active calendar segment.
-    Supports segments in the same grammar as parse_calendar_ranges.
+    Return True when the current local time falls inside any active calendar window.
+    Delegates calendar parsing to systemd-analyze so the evaluation exactly matches
+    the OnCalendar semantics used by the generated timers.
+
+    Strategy: for each start/stop pair, ask systemd when each *next* fires.
+    If the next stop is sooner than the next start, we are currently inside the
+    window (the start has already passed and the stop has not yet).
+    Falls back to False (do not start) if systemd-analyze cannot evaluate.
     """
     if not calendar:
         return True
 
-    now = datetime.now()
-    now_day = now.weekday()  # Mon=0 ... Sun=6
-    now_time = now.time()
+    start_specs, stop_specs = parse_calendar_ranges(calendar)
+    if not start_specs or not stop_specs:
+        return False
 
-    segments = [seg.strip() for seg in re.split(r"[;,]", calendar) if seg.strip()]
-    for seg in segments:
-        parts = seg.split()
-        if len(parts) == 2:
-            days_spec, timerange = parts
-        elif len(parts) == 1:
-            days_spec, timerange = "", parts[0]
-        else:
+    for start_spec, stop_spec in zip(start_specs, stop_specs):
+        next_start = _next_elapse(start_spec)
+        next_stop = _next_elapse(stop_spec)
+        if next_start is None or next_stop is None:
             continue
-
-        if ".." not in timerange:
-            continue
-
-        start_s, end_s = [t.strip() for t in timerange.split("..", 1)]
-        start_t = _parse_clock(start_s)
-        end_t = _parse_clock(end_s)
-        if not start_t or not end_t:
-            continue
-
-        active_days = _expand_days(days_spec)
-        if not active_days:
-            continue
-
-        if start_t <= end_t:
-            if now_day in active_days and start_t <= now_time < end_t:
-                return True
-        else:
-            previous_day = (now_day - 1) % 7
-            if (now_day in active_days and now_time >= start_t) or (previous_day in active_days and now_time < end_t):
-                return True
+        # Next stop sooner than next start → currently inside the active window.
+        if next_stop < next_start:
+            return True
 
     return False
 
