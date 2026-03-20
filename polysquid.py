@@ -348,9 +348,11 @@ ExecStart=/usr/bin/docker run \\
 ExecStop=/usr/bin/docker stop -t 20 squid_{safe_name}
 ExecStopPost=-/usr/bin/docker rm -f squid_{safe_name}
 """
-    service_file.write_text(service_content)
-
-    # Timers (if calendar provided)
+    # Calendar-driven services are started/stopped by their timers; they must NOT have
+    # WantedBy=multi-user.target or systemctl enable would start them outside their window.
+    # Services without a calendar are always-on and need the Install section.
+    if not calendar:
+        service_content += "\n[Install]\nWantedBy=multi-user.target\n"
     if calendar:
         start_specs, stop_specs = parse_calendar_ranges(calendar)
         start_timer_lines = [
@@ -566,7 +568,11 @@ def main():
                 if is_service_active_now(calendar):
                     run(SUDO + ["systemctl", "start", f"squid-{safe_name}.service"], check=False)
                 else:
-                    run(SUDO + ["systemctl", "stop", f"squid-{safe_name}.service"], ignore_err=True)
+                    # Only stop if actually running to suppress the "triggering units still active"
+                    # advisory systemd emits when stopping a service while its timer is armed.
+                    is_active = run(SUDO + ["systemctl", "is-active", "--quiet", f"squid-{safe_name}.service"])
+                    if is_active.returncode == 0:
+                        run(SUDO + ["systemctl", "stop", f"squid-{safe_name}.service"], ignore_err=True)
             else:
                 run(SUDO + ["ln", "-s", str(logrotate_file), f"/etc/logrotate.d/squid-{safe_name}"], ignore_err=True)
                 run(SUDO + ["systemctl", "daemon-reload"], check=False)
