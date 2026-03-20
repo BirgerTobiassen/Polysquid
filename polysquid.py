@@ -353,6 +353,8 @@ ExecStopPost=-/usr/bin/docker rm -f squid_{safe_name}
     # Services without a calendar are always-on and need the Install section.
     if not calendar:
         service_content += "\n[Install]\nWantedBy=multi-user.target\n"
+    service_file.write_text(service_content)
+
     if calendar:
         start_specs, stop_specs = parse_calendar_ranges(calendar)
         start_timer_lines = [

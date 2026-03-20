@@ -102,7 +102,7 @@ cat > "$LOGROTATE_CONF" << EOF
 EOF
 
 # Perform an initial reconciliation so enabled services start immediately after install.
-python3 "$TRUSTED_EXEC" --config "$REPO_DIR/services.yaml" --base-dir "$REPO_DIR"
+/usr/bin/python3 "$TRUSTED_EXEC" --config "$REPO_DIR/services.yaml" --base-dir "$REPO_DIR"
 
 echo "Installation complete!"
 echo "Trusted executor installed at: ${TRUSTED_EXEC}"
