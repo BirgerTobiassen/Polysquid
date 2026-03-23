@@ -1,21 +1,22 @@
-FROM ubuntu/python:3.12-24.04_stable
+FROM ubuntu:24.04
 
 # Set working directory
 WORKDIR /app
 
-# Install shell and build essentials
-RUN apt-get update && apt-get install -y --no-install-recommends bash ca-certificates && rm -rf /var/lib/apt/lists/*
+# Install Python 3.12 and dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 \
+    python3-pip \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
 # Copy application
 COPY app.py .
 COPY templates/ templates/
-
-# Create shared requests directory for volume mount
-RUN mkdir -p /shared/requests && chmod 755 /shared/requests
 
 # Run the app as a non-root user.
 RUN useradd --create-home --shell /usr/sbin/nologin appuser && chown -R appuser:appuser /app

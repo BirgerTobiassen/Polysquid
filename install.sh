@@ -44,6 +44,11 @@ install -o root -g root -m 0755 "$REPO_DIR/polysquid-update.sh" "$TRUSTED_UPDATE
 mkdir -p "$CERTS_DIR"
 chmod 755 /etc/polysquid "$CERTS_DIR" 2>/dev/null || true
 
+# Create self-service requests directory for dynamic whitelist submissions.
+REQUESTS_DIR="$REPO_DIR/self-service/requests"
+mkdir -p "$REQUESTS_DIR"
+chmod 755 "$REQUESTS_DIR"
+
 # Create systemd service
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 cat > "$SERVICE_FILE" << EOF
@@ -113,6 +118,7 @@ echo "Installation complete!"
 echo "Trusted executor installed at: ${TRUSTED_EXEC}"
 echo "Trusted updater installed at: ${TRUSTED_UPDATE}"
 echo "Shared cert directory prepared at: ${CERTS_DIR}"
+echo "Self-service requests directory prepared at: ${REQUESTS_DIR}"
 echo "Boot reconcile service enabled: ${RECONCILE_SERVICE_NAME}.service"
 echo "Enabled services have been reconciled and started where applicable."
 echo "The service will check for updates to services.yaml every 5 minutes and run the trusted executor if changes are found."
