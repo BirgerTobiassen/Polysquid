@@ -87,6 +87,7 @@ Edit `services.yaml` to define your services:
 services:
   - name: "Example Service"
     port: 3128
+    use_tls: true  # Optional: make the main service port a TLS Squid listener
     enabled: true
     on_calendar: "Mon..Fri 09:00..17:00"  # Optional scheduling
     allowed_ips: ["192.168.1.0/24", "10.0.0.1"]  # Optional IP restrictions
@@ -100,6 +101,7 @@ services:
 - `on_calendar`: Systemd calendar format for scheduled start/stop. Format: `"DAY HOUR1..HOUR2"` (e.g., `"Mon..Fri 08:00..18:00"`)
 - `allowed_ips`: List of source IP addresses or CIDR ranges allowed to connect
 - `whitelist`: List of destination domains allowed (deny-by-default if present, allow-by-default if empty)
+- `use_tls`: If true, the main `port` is exposed as a TLS Squid listener instead of plain HTTP
 
 ### Advanced: Shared Configurations
 
@@ -144,6 +146,7 @@ shared:
 ```yaml
 - name: "Corporate Proxy"
   port: 3128
+  use_tls: true
   enabled: true
   allowed_ips:
     - 192.168.1.0/24   # Only office network
@@ -151,6 +154,11 @@ shared:
     - .company.com
     - .github.com
     - .npm.org
+
+Clients can then connect to the Squid proxy over TLS on `port` using the same
+certificate pair stored in `/etc/polysquid/certs/` and mounted for the
+self-service HTTPS portal. This adds a
+TLS-protected proxy endpoint; it does not enable SSL bump or HTTPS interception.
 ```
 
 **Example**: Permissive with blocklist
@@ -305,7 +313,6 @@ docker ps --filter "name=squid_" --format "table {{.Names}}\t{{.Image}}\t{{.Port
 - Domains should include the leading dot for subdomain matching: `.example.com` matches `proxy.example.com` and `example.com`
 - Exact domains without dot: `example.com` matches only `example.com`
 - Whitelist takes precedence: if whitelist is defined, any non-whitelisted traffic is denied
-
 
 Example:
 

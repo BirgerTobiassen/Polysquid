@@ -14,6 +14,7 @@ RECONCILE_SERVICE_NAME="polysquid-reconcile"
 TRUSTED_DIR="/usr/local/lib/polysquid"
 TRUSTED_EXEC="${TRUSTED_DIR}/polysquid.py"
 TRUSTED_UPDATE="${TRUSTED_DIR}/polysquid-update.sh"
+CERTS_DIR="/etc/polysquid/certs"
 TIMER_INTERVAL="*-*-* *:0/5:00"  # Every 5 minutes
 
 # Check if running as root
@@ -38,6 +39,10 @@ chown -R root:root "$REPO_DIR"
 mkdir -p "$TRUSTED_DIR"
 install -o root -g root -m 0755 "$REPO_DIR/polysquid.py" "$TRUSTED_EXEC"
 install -o root -g root -m 0755 "$REPO_DIR/polysquid-update.sh" "$TRUSTED_UPDATE"
+
+# Create shared TLS cert location used by Squid TLS and self-service nginx.
+mkdir -p "$CERTS_DIR"
+chmod 755 /etc/polysquid "$CERTS_DIR" 2>/dev/null || true
 
 # Create systemd service
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -107,6 +112,7 @@ EOF
 echo "Installation complete!"
 echo "Trusted executor installed at: ${TRUSTED_EXEC}"
 echo "Trusted updater installed at: ${TRUSTED_UPDATE}"
+echo "Shared cert directory prepared at: ${CERTS_DIR}"
 echo "Boot reconcile service enabled: ${RECONCILE_SERVICE_NAME}.service"
 echo "Enabled services have been reconciled and started where applicable."
 echo "The service will check for updates to services.yaml every 5 minutes and run the trusted executor if changes are found."
