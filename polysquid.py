@@ -352,7 +352,6 @@ ExecStart=/usr/bin/docker run \\
 {tls_mount}  -p {port}:3128 \\
     {image}
 ExecStop=/usr/bin/docker stop -t 20 squid_{safe_name}
-ExecStopPost=-/usr/bin/docker rm -f squid_{safe_name}
 """
     # Calendar-driven services are started/stopped by their timers; they must NOT have
     # WantedBy=multi-user.target or systemctl enable would start them outside their window.
