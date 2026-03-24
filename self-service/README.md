@@ -4,7 +4,7 @@ A Flask-based web portal that allows users to request temporary network access. 
 
 ## Architecture
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
 │                                                              │
 │  User Browser                                                │
@@ -30,7 +30,7 @@ A Flask-based web portal that allows users to request temporary network access. 
 
 ## Directory Structure
 
-```
+```text
 self-service/
 ├── webapp/
 │   ├── app.py              # Flask application
@@ -38,6 +38,8 @@ self-service/
 │   │   └── portal.html     # Web UI
 │   ├── requirements.txt    # Python dependencies
 │   └── Dockerfile          # Container definition
+├── install.sh              # Install/build/enable/start the self-service stack
+├── build.sh                # Helper for manual build/start/stop/log workflows
 ├── whitelist-manager.py    # Helper to read request files
 ├── polysquid-self-service.service  # systemd unit template
 ├── polysquid-self-service-nginx.service  # HTTPS proxy service
@@ -54,27 +56,7 @@ Shared system path:
 
 ## Setup
 
-### 1. Build the Docker Image
-
-```bash
-cd /opt/polysquid/self-service/webapp
-docker build -t polysquid-self-service:latest .
-```
-
-### 2. Create Shared Directories
-
-The main installer prepares the shared directories used by the self-service stack:
-
-- `/opt/polysquid/self-service/requests`
-- `/etc/polysquid/certs`
-
-If you are deploying on a host that has not run the main installer yet, run:
-
-```bash
-sudo /opt/polysquid/install.sh
-```
-
-### 2a. TLS Certificates (Let's Encrypt Recommended)
+### 1. TLS Certificates (Let's Encrypt Recommended)
 
 Certificate issuance, renewal, and deployment are documented centrally in the main README:
 
@@ -82,22 +64,29 @@ Certificate issuance, renewal, and deployment are documented centrally in the ma
 
 Use that section as the source of truth for certificate setup.
 
-### 3. Deploy as systemd Service (Manual)
+The self-service stack expects:
+
+- `/etc/polysquid/certs/fullchain.pem`
+- `/etc/polysquid/certs/privkey.pem`
+
+### 2. Install the Stack
 
 ```bash
-sudo cp /opt/polysquid/self-service/polysquid-self-service.service \
-        /etc/systemd/system/
-sudo cp /opt/polysquid/self-service/polysquid-self-service-nginx.service \
-  /etc/systemd/system/
-
-sudo systemctl daemon-reload
-sudo systemctl enable polysquid-self-service.service
-sudo systemctl enable polysquid-self-service-nginx.service
-sudo systemctl start polysquid-self-service.service
-sudo systemctl start polysquid-self-service-nginx.service
+cd /opt/polysquid/self-service
+sudo ./install.sh
 ```
 
-### 4. Verify the Service
+The installer:
+
+- builds `polysquid-self-service:latest`
+- creates the `requests/` directory if missing
+- renders systemd units using the current repository path
+- installs the units into `/etc/systemd/system/`
+- enables and starts both the app and nginx services
+
+For iterative local operations after installation, `build.sh` is still available for `build`, `restart`, `logs`, and `clean` workflows.
+
+### 3. Verify the Service
 
 ```bash
 # Check HTTPS portal
@@ -114,7 +103,8 @@ docker logs -f polysquid_self_service_nginx
 
 ## Integration with Polysquid
 
-The Flask app writes request files to `/opt/polysquid/self-service/requests/`. Each file is a JSON object:
+The Flask app writes request files to the installed repository's `self-service/requests/` directory
+(commonly `/opt/polysquid/self-service/requests/`). Each file is a JSON object:
 
 ```json
 {
@@ -127,22 +117,22 @@ The Flask app writes request files to `/opt/polysquid/self-service/requests/`. E
 }
 ```
 
-**Next step**: Update polysquid.py to:
-1. Read these request files during reconciliation
-2. Extract active IPs (where expires_at > now)
-3. Dynamically inject them into the "Self service" Squid allowed_ips
-
-This allows users to request temporary access without administrator intervention.
+`whitelist-manager.py` can already read these files and generate dynamic ACL entries for active requests.
+That helper exists, but the main reconciliation flow in `polysquid.py` does not yet consume its output automatically.
+Today, the portal is responsible for request capture and storage; automatic injection into the proxy ACLs still needs to be wired into the main deployment flow.
 
 ## API Endpoints
 
 ### GET `/`
+
 Serves the web portal form.
 
 ### POST `/api/request`
+
 Submit a whitelist request.
 
 **Request body:**
+
 ```json
 {
   "duration_minutes": 60,
@@ -151,6 +141,7 @@ Submit a whitelist request.
 ```
 
 **Response:**
+
 ```json
 {
   "status": "success",
@@ -161,6 +152,7 @@ Submit a whitelist request.
 ```
 
 ### GET `/health`
+
 Health check endpoint.
 
 ## Configuration
@@ -173,7 +165,7 @@ Environment variables (set in systemd unit):
 
 ## Security Considerations
 
-1. **IP Spoofing**: The app captures `X-Forwarded-For` header if available. Ensure your proxy/load-balancer is trusted and sets this header correctly.
+1. **Source IP Trust**: The app uses `X-Real-IP` from nginx (falling back to the socket peer address). Keep the Flask app behind the provided nginx proxy so clients cannot set this header directly.
 2. **Rate Limiting**: Consider adding rate limiting to prevent abuse (currently not implemented).
 3. **Request Validation**: The app validates duration (1–1440 minutes) and IP format.
 4. **File Permissions**: Request files are world-readable in the shared volume. Ensure only authorized processes read them.
@@ -182,11 +174,13 @@ Environment variables (set in systemd unit):
 ## Troubleshooting
 
 ### Container won't start
+
 ```bash
 docker logs polysquid_self_service
 ```
 
 ### Cannot access the web portal
+
 - Check firewall: `sudo firewall-cmd --add-port=443/tcp --permanent`
 - Check app binding: `docker ps | grep polysquid_self_service`
 - Check proxy binding: `docker ps | grep polysquid_self_service_nginx`
@@ -194,11 +188,13 @@ docker logs polysquid_self_service
 - Check proxy logs: `docker logs polysquid_self_service_nginx`
 
 ### Let's Encrypt DNS-01 validation fails
+
 - Verify you created the TXT record exactly at `_acme-challenge.polysquid-test.uit.no`
 - Check DNS propagation from an external resolver: `dig TXT _acme-challenge.polysquid-test.uit.no`
 - If you use manual DNS validation, do not remove the TXT record until Certbot confirms the challenge succeeded
 
 ### Requests not being processed
+
 - Verify requests directory exists: `ls -la /opt/polysquid/self-service/requests/`
 - Check request files: `cat /opt/polysquid/self-service/requests/request_*.json`
 - Test whitelist manager: `python3 whitelist-manager.py /opt/polysquid/self-service/requests`
