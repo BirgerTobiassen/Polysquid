@@ -111,6 +111,11 @@ cat > "$LOGROTATE_CONF" << EOF
 }
 EOF
 
+# Build the SSL-capable Squid image (requires squid-openssl; needed for use_tls services).
+echo "Building polysquid-squid Docker image (squid-openssl)..."
+docker build -t polysquid-squid:latest -f "$REPO_DIR/squid.Dockerfile" "$REPO_DIR"
+echo "Squid image built: polysquid-squid:latest"
+
 # Perform an initial reconciliation so enabled services start immediately after install.
 /usr/bin/python3 "$TRUSTED_EXEC" --config "$REPO_DIR/services.yaml" --base-dir "$REPO_DIR"
 

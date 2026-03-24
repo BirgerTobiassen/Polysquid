@@ -333,15 +333,24 @@ on_calendar: "00:00..23:59:59"             # Every day (equivalent to no schedul
 
 ### Docker Image Configuration
 
-By default, Polysquid uses `ubuntu/squid:6.13-25.04_beta`. Override with:
+Polysquid uses `polysquid-squid:latest` by default — a locally built image based on Ubuntu 24.04 with
+the `squid-openssl` package, which compiles Squid with `--with-openssl` and is required for services
+with `use_tls: true`. The image is built automatically by `install.sh`.
+
+To build it manually:
 
 ```bash
-# Environment variable
-export POLYSQUID_IMAGE="ubuntu/squid:latest"
+docker build -t polysquid-squid:latest -f squid.Dockerfile .
+```
+
+To use a different image, override with the `POLYSQUID_IMAGE` environment variable:
+
+```bash
+export POLYSQUID_IMAGE="polysquid-squid:latest"
 python3 polysquid.py
 
-# Or in installation
-POLYSQUID_IMAGE="ubuntu/squid:latest" sudo ./install.sh
+# Or inline at install time
+POLYSQUID_IMAGE="polysquid-squid:latest" sudo ./install.sh
 
 # Check current containers
 docker ps --filter "name=squid_" --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
