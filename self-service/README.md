@@ -43,7 +43,7 @@ self-service/
 ├── polysquid-self-service-nginx.service  # HTTPS proxy service
 ├── nginx/
 │   └── nginx.conf          # TLS reverse proxy config
-├── requests/               # Shared volume (created on first run)
+├── requests/               # Shared volume (prepared by install.sh)
 └── README.md              # This file
 
 ```
@@ -63,66 +63,24 @@ docker build -t polysquid-self-service:latest .
 
 ### 2. Create Shared Directories
 
-```bash
-mkdir -p /opt/polysquid/self-service/requests
-chmod 777 /opt/polysquid/self-service/requests
-```
+The main installer prepares the shared directories used by the self-service stack:
 
-Note: `/etc/polysquid/certs` is prepared by the main installer (`install.sh`).
+- `/opt/polysquid/self-service/requests`
+- `/etc/polysquid/certs`
+
+If you are deploying on a host that has not run the main installer yet, run:
+
+```bash
+sudo /opt/polysquid/install.sh
+```
 
 ### 2a. TLS Certificates (Let's Encrypt Recommended)
 
-Domain currently in use: `polysquid-test.uit.no`
+Certificate issuance, renewal, and deployment are documented centrally in the main README:
 
-1. Ensure DNS A/AAAA records point to this host and open inbound TCP ports 80 and 443.
-1. Install Certbot and issue a certificate.
+- [TLS Certificates (Let's Encrypt DNS-01)](../README.md#4-tls-certificates-lets-encrypt-dns-01)
 
-```bash
-sudo apt update
-sudo apt install -y certbot
-sudo certbot certonly --standalone -d polysquid-test.uit.no
-```
-
-1. Copy cert files to the mounted certs directory used by the nginx container.
-
-```bash
-sudo cp /etc/letsencrypt/live/polysquid-test.uit.no/fullchain.pem /etc/polysquid/certs/fullchain.pem
-sudo cp /etc/letsencrypt/live/polysquid-test.uit.no/privkey.pem /etc/polysquid/certs/privkey.pem
-sudo chmod 600 /etc/polysquid/certs/privkey.pem
-```
-
-1. Restart the HTTPS proxy service.
-
-```bash
-sudo systemctl restart polysquid-self-service-nginx.service
-```
-
-Optional: if you already have certificates from another CA, place them in:
-
-- `/etc/polysquid/certs/fullchain.pem`
-- `/etc/polysquid/certs/privkey.pem`
-
-### 2b. Auto-Renewal Hook
-
-Create a deploy hook so renewed certificates are copied into the mounted cert path and nginx is restarted:
-
-```bash
-sudo tee /etc/letsencrypt/renewal-hooks/deploy/polysquid-self-service.sh >/dev/null <<'EOF'
-#!/usr/bin/env bash
-set -e
-cp /etc/letsencrypt/live/polysquid-test.uit.no/fullchain.pem /etc/polysquid/certs/fullchain.pem
-cp /etc/letsencrypt/live/polysquid-test.uit.no/privkey.pem /etc/polysquid/certs/privkey.pem
-chmod 600 /etc/polysquid/certs/privkey.pem
-systemctl restart polysquid-self-service-nginx.service
-EOF
-sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/polysquid-self-service.sh
-```
-
-Test renewal safely:
-
-```bash
-sudo certbot renew --dry-run
-```
+Use that section as the source of truth for certificate setup.
 
 ### 3. Deploy as systemd Service (Manual)
 
@@ -234,6 +192,11 @@ docker logs polysquid_self_service
 - Check proxy binding: `docker ps | grep polysquid_self_service_nginx`
 - Check app logs: `docker logs polysquid_self_service`
 - Check proxy logs: `docker logs polysquid_self_service_nginx`
+
+### Let's Encrypt DNS-01 validation fails
+- Verify you created the TXT record exactly at `_acme-challenge.polysquid-test.uit.no`
+- Check DNS propagation from an external resolver: `dig TXT _acme-challenge.polysquid-test.uit.no`
+- If you use manual DNS validation, do not remove the TXT record until Certbot confirms the challenge succeeded
 
 ### Requests not being processed
 - Verify requests directory exists: `ls -la /opt/polysquid/self-service/requests/`
