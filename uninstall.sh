@@ -82,6 +82,8 @@ fi
 
 echo "Reloading systemd daemon..."
 systemctl daemon-reload
+echo "Clearing stale failed systemd entries..."
+systemctl reset-failed 'polysquid-*' 2>/dev/null || true
 
 echo "Uninstall complete."
 if [[ "$PURGE" == false ]]; then
