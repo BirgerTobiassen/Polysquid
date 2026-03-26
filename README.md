@@ -9,7 +9,7 @@ Polysquid is a Python-based tool for managing multiple Squid proxy services usin
 - **Systemd Integration**: Automatically creates services, timers for schedule-based start/stop, and log rotation configs.
 - **Advanced Scheduling**: Schedule services by working hours, day of week, or custom calendar ranges with automatic shutdown.
 - **Flexible Access Control**: Combine IP/CIDR whitelisting and domain whitelists with convenient shared configuration support.
-- **Automated Updates**: Monitors Git for `services.yaml` changes and redeploys affected services without downtime.
+- **Automated Updates**: Monitors Git for `services.yaml` changes (every 5 minutes) and redeploys affected services without downtime. Self-service request file changes trigger an immediate reconciliation via a systemd path unit.
 - **Validation**: Comprehensive input validation with detailed logging of issues.
 
 ## Prerequisites
@@ -238,6 +238,7 @@ TLS-protected proxy endpoint; it does not enable SSL bump or HTTPS interception.
 
 - The install script sets up a systemd timer that checks Git every 5 minutes for changes to `services.yaml`
 - Changes automatically trigger the trusted executor at `/usr/local/lib/polysquid/polysquid.py` to redeploy affected services
+- A systemd path unit (`polysquid-reconcile.path`) watches the self-service `requests/` directory and triggers an **immediate** reconciliation when request files are added, modified, or removed — no polling delay
 - A boot reconcile service restores the correct service state after reboot (services start if current time is inside an enabled window)
 - No downtime; containers are replaced seamlessly
 
@@ -298,6 +299,13 @@ sudo journalctl -u polysquid-update.service
 tail -f /var/log/polysquid-update.log
 ```
 
+Check the real-time self-service request watcher:
+
+```bash
+sudo systemctl status polysquid-reconcile.path
+sudo systemctl status polysquid-reconcile.service
+```
+
 ## Requirements
 
 - **Python 3** with `pyyaml`
@@ -330,6 +338,7 @@ polysquid/
 - Repository: `/opt/polysquid/`
 - Trusted runtime scripts: `/usr/local/lib/polysquid/polysquid.py` and `/usr/local/lib/polysquid/polysquid-update.sh`
 - Boot reconcile service: `/etc/systemd/system/polysquid-reconcile.service`
+- Real-time request watcher: `/etc/systemd/system/polysquid-reconcile.path`
 - Systemd units: `/etc/systemd/system/squid-*.{service,timer}`
 - Log rotation: `/etc/logrotate.d/squid-*` and `/etc/logrotate.d/polysquid-update`
 - Update logs: `/var/log/polysquid-update.log`
@@ -481,6 +490,189 @@ sudo systemctl enable --now squid-<servicename>-start.timer
 # Stop all Squid services and clear stale containers
 sudo systemctl stop 'squid-*.service'
 sudo docker rm -f $(docker ps -a --filter "name=squid_" -q)
+```
+
+## Self-Service Access Portal
+
+A Flask-based web portal that allows users to request temporary network access. Submitted requests are saved as JSON files that polysquid reads to dynamically whitelist source IPs in the configured Squid proxy.
+
+### Architecture
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│                                                              │
+│  User Browser                                                │
+│         │                                                    │
+│         ├──> Nginx TLS Proxy (port 443)                      │
+│         │       │                                            │
+│         │       └──> Flask App (localhost:5000)              │
+│         │       │                                            │
+│         │       └──> Submits request (IP, duration)          │
+│         │              │                                     │
+│         │              └──> Saves to /requests/*.json        │
+│         │                     │                              │
+│         │                     └──> (Shared volume)           │
+│         │                            │                       │
+│         │                    polysquid reads files           │
+│         │                            │                       │
+│         │              Updates "Self service" whitelist      │
+│         │                            │                       │
+│         └────────────────> Squid allows IP temporarily       │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Directory Structure
+
+```text
+self-service/
+├── webapp/
+│   ├── app.py              # Flask application
+│   ├── templates/
+│   │   └── portal.html     # Web UI
+│   ├── requirements.txt    # Python dependencies
+│   └── Dockerfile          # Container definition
+├── install.sh              # Install/build/enable/start the self-service stack
+├── uninstall.sh            # Disable/remove installed units and containers
+├── build.sh                # Helper for manual build/start/stop/log workflows
+├── whitelist-manager.py    # Helper to read request files
+├── polysquid-self-service.service       # systemd unit template
+├── polysquid-self-service-nginx.service # HTTPS proxy service
+├── nginx/
+│   └── nginx.conf          # TLS reverse proxy config
+└── requests/               # Shared volume (prepared by install.sh)
+```
+
+Shared system path: `/etc/polysquid/certs/` — TLS certs: `fullchain.pem` + `privkey.pem`
+
+### Setup
+
+**1. TLS Certificates**: See [Prerequisites](#prerequisites) above — the same cert pair is used by both the main proxy and the self-service portal.
+
+**2. Install the stack:**
+
+```bash
+cd /opt/polysquid/self-service
+sudo ./install.sh
+```
+
+The installer:
+
+- Builds `polysquid-self-service:latest`
+- Creates the `requests/` directory if missing
+- Renders systemd units using the current repository path
+- Installs the units into `/etc/systemd/system/`
+- Enables and starts both the app and nginx services
+
+For iterative local operations after installation, `build.sh` supports `build`, `restart`, `logs`, and `clean` workflows.
+
+**3. Verify the service:**
+
+```bash
+# Check HTTPS portal
+curl -k https://localhost/
+
+# View status
+sudo systemctl status polysquid-self-service.service
+sudo systemctl status polysquid-self-service-nginx.service
+
+# View logs
+docker logs -f polysquid_self_service
+docker logs -f polysquid_self_service_nginx
+```
+
+**4. Uninstall:**
+
+```bash
+cd /opt/polysquid/self-service
+sudo ./uninstall.sh
+
+# To also remove the Docker image and requests/ directory:
+sudo ./uninstall.sh --purge
+```
+
+### Request File Format
+
+The Flask app writes request files to `self-service/requests/` (commonly `/opt/polysquid/self-service/requests/`):
+
+```json
+{
+  "timestamp": "2026-03-23T12:34:56.789123Z",
+  "source_ip": "192.168.1.100",
+  "duration_minutes": 60,
+  "expires_at": "2026-03-23T13:34:56.789123Z",
+  "reason": "Need to access corporate portal",
+  "status": "pending"
+}
+```
+
+Request file changes trigger immediate reconciliation via the `polysquid-reconcile.path` systemd path unit. When a file is added or modified, systemd runs `polysquid-reconcile.service` which invokes `polysquid.py` to redeploy affected services. `whitelist-manager.py` is available as a standalone helper to inspect and generate ACL entries from active requests.
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Serves the web portal form |
+| `POST` | `/api/request` | Submit a whitelist request |
+| `GET` | `/health` | Health check |
+
+**POST `/api/request` body:**
+
+```json
+{
+  "duration_minutes": 60,
+  "reason": "Optional description"
+}
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "message": "Request submitted for 60 minutes",
+  "request_id": "request_20260323_123456_789123.json",
+  "expires_at": "2026-03-23T13:34:56.789123Z"
+}
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REQUESTS_DIR` | `/shared/requests` | Path to requests directory |
+| `REQUEST_PORT` | `5000` | Flask port |
+| `LOG_LEVEL` | `INFO` | Logging level |
+
+### Self-Service Troubleshooting
+
+**Container won't start:**
+
+```bash
+docker logs polysquid_self_service
+```
+
+**Cannot access the web portal:**
+
+```bash
+# Check firewall
+sudo firewall-cmd --add-port=443/tcp --permanent
+
+# Check container binding
+docker ps | grep polysquid_self_service
+docker logs polysquid_self_service
+docker logs polysquid_self_service_nginx
+```
+
+**Requests not being processed:**
+
+```bash
+# Verify requests directory and files
+ls -la /opt/polysquid/self-service/requests/
+cat /opt/polysquid/self-service/requests/request_*.json
+
+# Test whitelist manager
+python3 self-service/whitelist-manager.py /opt/polysquid/self-service/requests
 ```
 
 ## License
