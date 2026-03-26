@@ -32,6 +32,7 @@ services:
   enabled: true
   allowed_ips:
     - 129.242.32.226
+    - 10.226.0.0/16
 
 - name: "TEST_RØD"
   port: 3133
@@ -39,6 +40,7 @@ services:
   enabled: true
   allowed_ips:
     - 129.242.32.227
+    - 10.227.0.0/16
 
 
 shared:
