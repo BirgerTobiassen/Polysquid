@@ -383,12 +383,12 @@ Restart=no
 TimeoutStopSec=30
 # Ensure stale containers are removed before starting
 ExecStartPre=-/usr/bin/docker rm -f polysquid_{safe_name}
-ExecStart=/usr/bin/docker run \\\
-  --name polysquid_{safe_name} \\\
-  -v {conf_dir}/squid.conf:/etc/squid/squid.conf \\\
-  -v {log_dir}:/var/log/squid \\\
-  -v {cache_dir}:/var/spool/squid \\\
-{tls_mount}  -p {port}:3128 \\\
+ExecStart=/usr/bin/docker run \\
+  --name polysquid_{safe_name} \\
+  -v {conf_dir}/squid.conf:/etc/squid/squid.conf \\
+  -v {log_dir}:/var/log/squid \\
+  -v {cache_dir}:/var/spool/squid \\
+{tls_mount}  -p {port}:3128 \\
     {image}
 ExecStop=/usr/bin/docker stop -t 20 polysquid_{safe_name}
 """
