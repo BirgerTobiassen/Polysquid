@@ -114,6 +114,83 @@ def resolve_service_calendar(value, shared_or_calendars: Dict) -> str:
     return ""
 
 
+def _normalize_whitelist_domain(raw: str) -> Optional[str]:
+    """
+    Normalize and validate a single whitelist domain token.
+    Returns normalized token or None if invalid.
+    """
+    if not isinstance(raw, str):
+        return None
+
+    token = raw.strip().lower()
+    if not token:
+        return None
+
+    # Accept wildcard prefix form and map it to Squid-style leading dot.
+    if token.startswith("*."):
+        token = "." + token[2:]
+
+    # Strip trailing dot from FQDN style entries.
+    token = token.rstrip(".")
+    if not token or token == ".":
+        return None
+
+    if " " in token or "/" in token or ":" in token:
+        return None
+
+    base = token[1:] if token.startswith(".") else token
+    if not base:
+        return None
+
+    # Conservative hostname validation (labels 1-63 chars, alnum/hyphen, no edge hyphen).
+    labels = base.split(".")
+    for lbl in labels:
+        if not lbl or len(lbl) > 63:
+            return None
+        if not re.fullmatch(r"[a-z0-9-]+", lbl):
+            return None
+        if lbl.startswith("-") or lbl.endswith("-"):
+            return None
+
+    return ("." + base) if token.startswith(".") else base
+
+
+def _prune_redundant_whitelist_domains(domains: List[str]) -> List[str]:
+    """
+    Remove entries covered by broader parent domains to satisfy Squid ACL rules.
+    Example: '.bit.nl.releases.ubuntu.com' is removed when '.releases.ubuntu.com' exists.
+    """
+    def overlap_form(d: str) -> Optional[str]:
+        if d.startswith("."):
+            return d
+        if "." in d:
+            return "." + d
+        return None
+
+    overlap_map: Dict[str, str] = {}
+    for d in domains:
+        ov = overlap_form(d)
+        if ov:
+            overlap_map[d] = ov
+
+    redundant = set()
+    keys = list(overlap_map.keys())
+    for d in keys:
+        cur = overlap_map[d]
+        for other in keys:
+            if d == other:
+                continue
+            parent = overlap_map[other]
+            if len(parent) >= len(cur):
+                continue
+            if cur.endswith(parent):
+                redundant.add(d)
+                log.info(f"Dropping redundant whitelist domain '{d}' covered by '{other}'")
+                break
+
+    return [d for d in domains if d not in redundant]
+
+
 def resolve_service_whitelist(service: Dict, shared: Dict) -> List[str]:
     """
     Resolve service whitelist entries from the structured `whitelists` mapping.
@@ -141,14 +218,13 @@ def resolve_service_whitelist(service: Dict, shared: Dict) -> List[str]:
     literal_items = structured.get("list", [])
     if isinstance(literal_items, list):
         for domain in literal_items:
-            if not isinstance(domain, str):
+            normalized = _normalize_whitelist_domain(str(domain))
+            if not normalized:
                 log.warning(f"Ignoring invalid domain '{domain}'")
                 continue
-            if domain and " " not in domain and domain not in seen:
-                out.append(domain)
-                seen.add(domain)
-            else:
-                log.warning(f"Ignoring invalid domain '{domain}'")
+            if normalized not in seen:
+                out.append(normalized)
+                seen.add(normalized)
     elif literal_items:
         log.warning("Ignoring invalid 'whitelists.list' value: expected a list")
 
@@ -163,11 +239,13 @@ def resolve_service_whitelist(service: Dict, shared: Dict) -> List[str]:
                 log.warning(f"Ignoring invalid shared list '{shared_name}' (not a list)")
                 continue
             for domain in expanded:
-                if isinstance(domain, str) and domain and " " not in domain and domain not in seen:
-                    out.append(domain)
-                    seen.add(domain)
-                else:
+                normalized = _normalize_whitelist_domain(str(domain))
+                if not normalized:
                     log.warning(f"Ignoring invalid domain '{domain}' from shared list '{shared_name}'")
+                    continue
+                if normalized not in seen:
+                    out.append(normalized)
+                    seen.add(normalized)
     elif shared_items:
         log.warning("Ignoring invalid 'whitelists.shared' value: expected a list")
 
@@ -184,7 +262,7 @@ def resolve_service_whitelist(service: Dict, shared: Dict) -> List[str]:
     elif edl_items:
         log.warning("Ignoring invalid 'whitelists.edl' value: expected a list")
 
-    return out
+    return _prune_redundant_whitelist_domains(out)
 
 
 def has_structured_calendar(service: Dict) -> bool:
@@ -248,20 +326,18 @@ def _fetch_edl_list(url: str, timeout: int = 10) -> List[str]:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            
-            # Validate domain format (basic check: no spaces)
-            if " " in line:
+
+            domain = _normalize_whitelist_domain(line)
+            if not domain:
                 log.warning(f"EDL {url}: ignoring invalid domain '{line}'")
                 continue
-            
-            # Normalize: add leading dot for ordinary hostnames to preserve the
-            # Squid-style subdomain matching used elsewhere in the config.
-            domain = line if line.startswith(".") or "." not in line else f".{line}"
             
             if domain not in seen:
                 domains.append(domain)
                 seen.add(domain)
-        
+
+        domains = _prune_redundant_whitelist_domains(domains)
+
         log.info(f"Successfully fetched {len(domains)} domains from EDL: {url}")
         _EDL_CACHE[url] = domains
         return domains
