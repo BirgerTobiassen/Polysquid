@@ -10,7 +10,7 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from urllib.request import urlopen
+from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
 import yaml
@@ -229,7 +229,15 @@ def _fetch_edl_list(url: str, timeout: int = 10) -> List[str]:
 
     try:
         log.debug(f"Fetching EDL from {url}")
-        with urlopen(url, timeout=timeout) as response:
+        # Some EDL providers reject Python's default urllib user-agent.
+        req = Request(
+            url,
+            headers={
+                "User-Agent": "polysquid-edl/1.0 (+https://github.com/BirgerTobiassen/Polysquid)",
+                "Accept": "text/plain,*/*;q=0.8",
+            },
+        )
+        with urlopen(req, timeout=timeout) as response:
             content = response.read().decode('utf-8')
         
         domains = []
