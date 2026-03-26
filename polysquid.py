@@ -10,12 +10,17 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib.request import urlopen
+from urllib.error import URLError, HTTPError
 
 import yaml
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("polysquid")
+
+# Per-reconcile cache for EDL fetches to avoid redundant network requests
+_EDL_CACHE: Dict[str, List[str]] = {}
 
 BASE_DIR = Path(os.getcwd())
 SUDO = [] if os.geteuid() == 0 else ["sudo"]
@@ -65,57 +70,129 @@ def load_yaml(path: Path) -> Dict:
         raise SystemExit(1)
 
 
-def resolve_shared_calendar(value: str, shared_or_calendars: Dict) -> str:
+def resolve_service_calendar(value, shared_or_calendars: Dict) -> str:
     """
-    Replace 'shared.calendars.X' with the string value from shared.calendars (or calendars dict).
-    Returns value unchanged if not a shared reference.
+    Resolve the structured on_calendar mapping.
+
+    Supported format:
+      on_calendar:
+        shared: work_hours
+
+    or:
+      on_calendar:
+        string: "Mon..Fri 08:00..18:00"
     """
-    if not value or not isinstance(value, str):
+    if not value:
         return ""
-    if value.startswith("shared.calendars."):
-        key = value.split(".", 2)[2]
-        # Accept either whole 'shared' dict or just the calendars dict
-        if isinstance(shared_or_calendars, dict) and "calendars" in shared_or_calendars:
-            calendars = shared_or_calendars.get("calendars", {})
-        else:
-            calendars = shared_or_calendars if isinstance(shared_or_calendars, dict) else {}
-        return str(calendars.get(key, "")).strip()
-    return value.strip()
+
+    if not isinstance(value, dict):
+        log.warning("Ignoring invalid 'on_calendar' value: expected a mapping")
+        return ""
+
+    calendars = shared_or_calendars.get("calendars", {}) if isinstance(shared_or_calendars, dict) else {}
+
+    shared_value = value.get("shared")
+    string_value = value.get("string")
+
+    if shared_value and string_value:
+        log.warning("Ignoring invalid 'on_calendar': use either 'shared' or 'string', not both")
+        return ""
+
+    if shared_value is not None:
+        if not isinstance(shared_value, str):
+            log.warning("Ignoring invalid 'on_calendar.shared' value: expected a string")
+            return ""
+        return str(calendars.get(shared_value, "")).strip()
+
+    if string_value is not None:
+        if not isinstance(string_value, str):
+            log.warning("Ignoring invalid 'on_calendar.string' value: expected a string")
+            return ""
+        return string_value.strip()
+
+    log.warning("Ignoring invalid 'on_calendar': expected 'shared' or 'string'")
+    return ""
 
 
-def resolve_shared_lists(items, shared: Dict) -> List[str]:
+def resolve_service_whitelist(service: Dict, shared: Dict) -> List[str]:
     """
-    Expand 'shared.lists.X' entries into their items, flattening and preserving order.
-    Non-string entries are ignored. Duplicates removed while preserving order.
+    Resolve service whitelist entries from the structured `whitelists` mapping.
+
+    Supported format:
+      whitelists:
+        list:
+          - .example.com
+        shared:
+          - office_sites
+        edl:
+          - https://example.invalid/list.txt
     """
-    if not items:
+    structured = service.get("whitelists", {})
+    if not structured:
         return []
+    if not isinstance(structured, dict):
+        log.warning("Ignoring invalid 'whitelists' value: expected a mapping")
+        return []
+
     out: List[str] = []
     seen = set()
     lists = shared.get("lists", {}) if isinstance(shared, dict) else {}
-    for itm in items:
-        if not isinstance(itm, str):
-            log.warning(f"Ignoring non-string list item: {itm}")
-            continue
-        if itm.startswith("shared.lists."):
-            key = itm.split(".", 2)[2]
-            expanded = lists.get(key, [])
-            if not isinstance(expanded, list):
-                log.warning(f"Ignoring invalid shared list '{itm}' (not a list)")
+
+    literal_items = structured.get("list", [])
+    if isinstance(literal_items, list):
+        for domain in literal_items:
+            if not isinstance(domain, str):
+                log.warning(f"Ignoring invalid domain '{domain}'")
                 continue
-            for d in expanded:
-                if isinstance(d, str) and d and " " not in d and d not in seen:
-                    out.append(d)
-                    seen.add(d)
-                else:
-                    log.warning(f"Ignoring invalid domain '{d}' from {itm}")
-        else:
-            if itm and " " not in itm and itm not in seen:
-                out.append(itm)
-                seen.add(itm)
+            if domain and " " not in domain and domain not in seen:
+                out.append(domain)
+                seen.add(domain)
             else:
-                log.warning(f"Ignoring invalid domain '{itm}'")
+                log.warning(f"Ignoring invalid domain '{domain}'")
+    elif literal_items:
+        log.warning("Ignoring invalid 'whitelists.list' value: expected a list")
+
+    shared_items = structured.get("shared", [])
+    if isinstance(shared_items, list):
+        for shared_name in shared_items:
+            if not isinstance(shared_name, str):
+                log.warning(f"Ignoring invalid shared whitelist reference '{shared_name}'")
+                continue
+            expanded = lists.get(shared_name, [])
+            if not isinstance(expanded, list):
+                log.warning(f"Ignoring invalid shared list '{shared_name}' (not a list)")
+                continue
+            for domain in expanded:
+                if isinstance(domain, str) and domain and " " not in domain and domain not in seen:
+                    out.append(domain)
+                    seen.add(domain)
+                else:
+                    log.warning(f"Ignoring invalid domain '{domain}' from shared list '{shared_name}'")
+    elif shared_items:
+        log.warning("Ignoring invalid 'whitelists.shared' value: expected a list")
+
+    edl_items = structured.get("edl", [])
+    if isinstance(edl_items, list):
+        for edl_url in edl_items:
+            if not isinstance(edl_url, str):
+                log.warning(f"Ignoring invalid EDL URL '{edl_url}'")
+                continue
+            for domain in _fetch_edl_list(edl_url):
+                if domain not in seen:
+                    out.append(domain)
+                    seen.add(domain)
+    elif edl_items:
+        log.warning("Ignoring invalid 'whitelists.edl' value: expected a list")
+
     return out
+
+
+def has_structured_calendar(service: Dict) -> bool:
+    return "on_calendar" in service
+
+
+def has_structured_whitelists(service: Dict) -> bool:
+    return "whitelists" in service
 
 
 def validate_allowed_ips(allowed_ips) -> List[str]:
@@ -136,6 +213,59 @@ def validate_allowed_ips(allowed_ips) -> List[str]:
         except Exception:
             log.warning(f"Ignoring invalid allowed_ip '{ip}'")
     return valid
+
+
+def _fetch_edl_list(url: str, timeout: int = 10) -> List[str]:
+    """
+    Fetch an EDL (External Data List) from the given URL.
+    Parses plaintext format (one domain per line, ignoring comments and blank lines).
+    Returns a list of domains, or empty list on error.
+    Uses per-reconcile cache to avoid redundant fetches.
+    """
+    # Return cached result if already fetched in this reconcile run
+    if url in _EDL_CACHE:
+        log.debug(f"EDL cache hit for {url}")
+        return _EDL_CACHE[url]
+
+    try:
+        log.debug(f"Fetching EDL from {url}")
+        with urlopen(url, timeout=timeout) as response:
+            content = response.read().decode('utf-8')
+        
+        domains = []
+        seen = set()
+        
+        for line in content.splitlines():
+            # Strip whitespace and skip comments / blank lines
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            
+            # Validate domain format (basic check: no spaces)
+            if " " in line:
+                log.warning(f"EDL {url}: ignoring invalid domain '{line}'")
+                continue
+            
+            # Normalize: add leading dot for ordinary hostnames to preserve the
+            # Squid-style subdomain matching used elsewhere in the config.
+            domain = line if line.startswith(".") or "." not in line else f".{line}"
+            
+            if domain not in seen:
+                domains.append(domain)
+                seen.add(domain)
+        
+        log.info(f"Successfully fetched {len(domains)} domains from EDL: {url}")
+        _EDL_CACHE[url] = domains
+        return domains
+    
+    except (URLError, HTTPError) as e:
+        log.error(f"Failed to fetch EDL from {url}: {e}")
+        _EDL_CACHE[url] = []
+        return []
+    except Exception as e:
+        log.error(f"Unexpected error fetching EDL from {url}: {e}")
+        _EDL_CACHE[url] = []
+        return []
 
 
 def _load_active_self_service_ips(requests_dir: Path) -> List[str]:
@@ -283,12 +413,14 @@ def validate_service(service: Dict, shared: Dict) -> Dict:
     enabled = bool(service["enabled"])
     # Allowed IPs
     allowed_ips = validate_allowed_ips(service.get("allowed_ips", []))
-    # Whitelist with shared lists expanded
-    whitelist = resolve_shared_lists(service.get("whitelist", []), shared)
+    # Whitelist with structured format expanded
+    whitelist = resolve_service_whitelist(service, shared)
+    whitelist_defined = has_structured_whitelists(service)
 
     # Calendar (resolve shared and parse)
-    calendar_raw = service.get("on_calendar", "")
-    calendar_resolved = resolve_shared_calendar(calendar_raw, shared)
+    calendar_raw = service.get("on_calendar", {})
+    calendar_resolved = resolve_service_calendar(calendar_raw, shared)
+    calendar_defined = has_structured_calendar(service)
 
     # Return validated
     return {
@@ -297,16 +429,24 @@ def validate_service(service: Dict, shared: Dict) -> Dict:
         "use_tls": use_tls,
         "enabled": enabled,
         "calendar": calendar_resolved,
+        "calendar_defined": calendar_defined,
         "allowed_ips": allowed_ips,
         "whitelist": whitelist,
+        "whitelist_defined": whitelist_defined,
     }
 
 
-def generate_squid_conf(conf_path: Path, allowed_ips: List[str], whitelist: List[str], use_tls: bool) -> bool:
+def generate_squid_conf(
+    conf_path: Path,
+    allowed_ips: List[str],
+    whitelist: List[str],
+    whitelist_defined: bool,
+    use_tls: bool,
+) -> bool:
     """
     Build squid.conf with deny-by-default access control:
-    - If whitelist provided: only allow those domains, deny everything else.
-    - If no whitelist: allow all from allowed_ips, deny everything else.
+    - If whitelists is configured: only allow those domains, deny everything else.
+    - If no whitelists is configured: allow all from allowed_ips, deny everything else.
     - Combine source and destination ACLs so source restrictions aren't bypassed.
     - If no allowed_ips are given, allow all sources.
     """
@@ -325,12 +465,13 @@ def generate_squid_conf(conf_path: Path, allowed_ips: List[str], whitelist: List
         lines.append("acl whitelist dstdomain " + " ".join(whitelist))
     lines.append("")  # spacer
     # Access rules: deny-by-default
-    if whitelist:
+    if whitelist_defined:
         # Allow only whitelisted destinations, restricted by source
-        lines.append("# Allow only whitelisted destinations (sources restricted via allowed_ips)")
-        lines.append("http_access allow allowed_ips whitelist")
+        lines.append("# Restrict access to explicitly whitelisted destinations")
+        if whitelist:
+            lines.append("http_access allow allowed_ips whitelist")
     else:
-        # No whitelist: allow all from allowed_ips
+        # No whitelists configured: allow all from allowed_ips
         lines.append("http_access allow allowed_ips")
     lines.append("http_access deny all")
 
@@ -353,6 +494,7 @@ def write_systemd_units(
     use_tls: bool,
     image: str,
     calendar: str,
+    calendar_defined: bool,
 ) -> Tuple[Path, Path, Path, Path, Path]:
     """
     Write the .service, start timer, stop .service (oneshot), and stop timer.
@@ -395,7 +537,7 @@ ExecStop=/usr/bin/docker stop -t 20 polysquid_{safe_name}
     # Calendar-driven services are started/stopped by their timers; they must NOT have
     # WantedBy=multi-user.target or systemctl enable would start them outside their window.
     # Services without a calendar are always-on and need the Install section.
-    if not calendar:
+    if not calendar_defined:
         service_content += "\n[Install]\nWantedBy=multi-user.target\n"
     service_file.write_text(service_content)
 
@@ -515,6 +657,10 @@ def main():
     if args.verbose:
         log.setLevel(logging.DEBUG)
 
+    # Clear EDL cache at the start of each reconcile run
+    global _EDL_CACHE
+    _EDL_CACHE.clear()
+
     base_dir = Path(args.base_dir).resolve()
     data = load_yaml(Path(args.config))
     services = data.get("services", [])
@@ -554,8 +700,10 @@ def main():
         use_tls = validated["use_tls"]
         enabled = validated["enabled"]
         calendar = validated["calendar"]
+        calendar_defined = validated["calendar_defined"]
         allowed_ips = validated["allowed_ips"]
         whitelist = validated["whitelist"]
+        whitelist_defined = validated["whitelist_defined"]
         safe_name = safe_service_name(name, fallback=f"polysquid_{port}")
 
         # Layout
@@ -573,7 +721,7 @@ def main():
         run(SUDO + ["chown", "-R", "13:13", str(cache_dir)], ignore_err=True)
 
         # squid.conf
-        conf_changed = generate_squid_conf(conf_dir / "squid.conf", allowed_ips, whitelist, use_tls)
+        conf_changed = generate_squid_conf(conf_dir / "squid.conf", allowed_ips, whitelist, whitelist_defined, use_tls)
         if conf_changed:
             # Signal running container to reload config without restart (squid -k reconfigure).
             r = run(SUDO + ["systemctl", "is-active", "--quiet", f"polysquid-{safe_name}.service"])
@@ -594,6 +742,7 @@ def main():
             use_tls=use_tls,
             image=args.image,
             calendar=calendar,
+            calendar_defined=calendar_defined,
         )
 
         # Clean old symlinks
@@ -610,7 +759,7 @@ def main():
             run(SUDO + ["ln", "-s", str(service_file), f"/etc/systemd/system/polysquid-{safe_name}.service"])
 
             # Timers and stop unit are only used when the service has a schedule.
-            if calendar:
+            if calendar_defined:
                 if start_timer_file.exists():
                     run(SUDO + ["ln", "-s", str(start_timer_file), f"/etc/systemd/system/polysquid-{safe_name}-start.timer"])
                 if stop_service_file.exists():
@@ -625,15 +774,18 @@ def main():
                 if stop_timer_file.exists():
                     run(SUDO + ["systemctl", "enable", "--now", f"polysquid-{safe_name}-stop.timer"], check=False)
 
-                # Ensure correct state now (install/run time), independent of timer catch-up behavior.
-                if is_service_active_now(calendar):
-                    run(SUDO + ["systemctl", "start", f"polysquid-{safe_name}.service"], check=False)
+                if calendar:
+                    # Ensure correct state now (install/run time), independent of timer catch-up behavior.
+                    if is_service_active_now(calendar):
+                        run(SUDO + ["systemctl", "start", f"polysquid-{safe_name}.service"], check=False)
+                    else:
+                        # Only stop if actually running to suppress the "triggering units still active"
+                        # advisory systemd emits when stopping a service while its timer is armed.
+                        is_active = run(SUDO + ["systemctl", "is-active", "--quiet", f"polysquid-{safe_name}.service"])
+                        if is_active.returncode == 0:
+                            run(SUDO + ["systemctl", "stop", f"polysquid-{safe_name}.service"], ignore_err=True)
                 else:
-                    # Only stop if actually running to suppress the "triggering units still active"
-                    # advisory systemd emits when stopping a service while its timer is armed.
-                    is_active = run(SUDO + ["systemctl", "is-active", "--quiet", f"polysquid-{safe_name}.service"])
-                    if is_active.returncode == 0:
-                        run(SUDO + ["systemctl", "stop", f"polysquid-{safe_name}.service"], ignore_err=True)
+                    log.warning(f"Service '{name}' declares on_calendar but no valid timer schedule was resolved; leaving service stopped")
             else:
                 run(SUDO + ["ln", "-s", str(logrotate_file), f"/etc/logrotate.d/polysquid-{safe_name}"], ignore_err=True)
                 run(SUDO + ["systemctl", "daemon-reload"], check=False)
@@ -710,8 +862,10 @@ def _process_self_service_service(
     use_tls = validated["use_tls"]
     enabled = validated["enabled"]
     calendar = validated["calendar"]
+    calendar_defined = validated["calendar_defined"]
     allowed_ips = validated["allowed_ips"]
     whitelist = validated["whitelist"]
+    whitelist_defined = validated["whitelist_defined"]
     safe_name = safe_service_name(name, fallback="self-service")
 
     requests_dir = base_dir / "self-service" / "requests"
@@ -732,7 +886,7 @@ def _process_self_service_service(
     run(SUDO + ["chown", "-R", "13:13", str(log_dir)], ignore_err=True)
     run(SUDO + ["chown", "-R", "13:13", str(cache_dir)], ignore_err=True)
 
-    conf_changed = generate_squid_conf(conf_dir / "squid.conf", allowed_ips, whitelist, use_tls)
+    conf_changed = generate_squid_conf(conf_dir / "squid.conf", allowed_ips, whitelist, whitelist_defined, use_tls)
     if conf_changed:
         r = run(SUDO + ["systemctl", "is-active", "--quiet", f"polysquid-{safe_name}.service"])
         if r.returncode == 0:
@@ -751,6 +905,7 @@ def _process_self_service_service(
         use_tls=use_tls,
         image=image,
         calendar=calendar,
+        calendar_defined=calendar_defined,
     )
 
     run(SUDO + ["rm", "-f", f"/etc/systemd/system/polysquid-{safe_name}.service"])
@@ -763,7 +918,7 @@ def _process_self_service_service(
         log.info(f"Enabled: {name}")
         run(SUDO + ["ln", "-s", str(service_file), f"/etc/systemd/system/polysquid-{safe_name}.service"])
 
-        if calendar:
+        if calendar_defined:
             if start_timer_file.exists():
                 run(SUDO + ["ln", "-s", str(start_timer_file), f"/etc/systemd/system/polysquid-{safe_name}-start.timer"])
             if stop_service_file.exists():
@@ -778,12 +933,15 @@ def _process_self_service_service(
             if stop_timer_file.exists():
                 run(SUDO + ["systemctl", "enable", "--now", f"polysquid-{safe_name}-stop.timer"], check=False)
 
-            if is_service_active_now(calendar):
-                run(SUDO + ["systemctl", "start", f"polysquid-{safe_name}.service"], check=False)
+            if calendar:
+                if is_service_active_now(calendar):
+                    run(SUDO + ["systemctl", "start", f"polysquid-{safe_name}.service"], check=False)
+                else:
+                    is_active = run(SUDO + ["systemctl", "is-active", "--quiet", f"polysquid-{safe_name}.service"])
+                    if is_active.returncode == 0:
+                        run(SUDO + ["systemctl", "stop", f"polysquid-{safe_name}.service"], ignore_err=True)
             else:
-                is_active = run(SUDO + ["systemctl", "is-active", "--quiet", f"polysquid-{safe_name}.service"])
-                if is_active.returncode == 0:
-                    run(SUDO + ["systemctl", "stop", f"polysquid-{safe_name}.service"], ignore_err=True)
+                log.warning(f"Service '{name}' declares on_calendar but no valid timer schedule was resolved; leaving service stopped")
         else:
             run(SUDO + ["ln", "-s", str(logrotate_file), f"/etc/logrotate.d/polysquid-{safe_name}"], ignore_err=True)
             run(SUDO + ["systemctl", "daemon-reload"], check=False)

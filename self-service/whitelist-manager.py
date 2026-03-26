@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Dynamic IP whitelisting manager for self-service requests.
-Reads request files and updates Squid ACLs with temporary whitelist entries.
-Called periodically by polysquid to refresh allowed IPs for the "Self service" proxy.
+Standalone helper for inspecting self-service request files.
+Reads request files, filters out expired entries, and can render an example ACL snippet.
+The live self-service proxy is reconciled by polysquid.py; this helper is for diagnostics.
 """
 
 import json
@@ -17,7 +17,7 @@ log = logging.getLogger("whitelist-manager")
 
 def load_requests(requests_dir: str) -> dict:
     """
-    Load all pending/active request files from the requests directory.
+    Load all active request files from the requests directory.
     Returns dict: {source_ip: {duration, expires_at, reason, ...}}
     """
     requests_path = Path(requests_dir)
@@ -59,7 +59,7 @@ def load_requests(requests_dir: str) -> dict:
 
 
 def generate_acl_config(active_whitelist: dict) -> str:
-    """Generate Squid ACL config lines for dynamic IPs."""
+    """Generate example Squid ACL config lines for active request IPs."""
     if not active_whitelist:
         return "# No active whitelist requests\n"
     

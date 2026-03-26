@@ -94,13 +94,15 @@ services:
   - name: "Office Proxy"
     port: 3128
     enabled: true
-    on_calendar: "Mon..Fri 08:00..18:00"  # Auto start/stop weekdays 8am-6pm
+    on_calendar:
+      string: "Mon..Fri 08:00..18:00"  # Auto start/stop weekdays 8am-6pm
     allowed_ips:
       - 192.168.1.0/24
       - 10.0.0.0/8
-    whitelist:
-      - .example.com
-      - .trusted.org
+    whitelists:
+      list:
+        - .example.com
+        - .trusted.org
 ```
 
 ### 3. Deploy
@@ -146,18 +148,20 @@ services:
     port: 3128
     use_tls: true  # Optional: make the main service port a TLS Squid listener
     enabled: true
-    on_calendar: "Mon..Fri 09:00..17:00"  # Optional scheduling
+    on_calendar:
+      string: "Mon..Fri 09:00..17:00"  # Optional scheduling
     allowed_ips: ["192.168.1.0/24", "10.0.0.1"]  # Optional IP restrictions
-    whitelist: ["example.com", "trusted.org"]  # Optional domain whitelist
+    whitelists:
+      list: ["example.com", "trusted.org"]  # Optional domain whitelist
 ```
 
 **Required fields**: `name`, `port`, `enabled`
 
 **Optional fields**:
 
-- `on_calendar`: Systemd calendar format for scheduled start/stop. Format: `"DAY HOUR1..HOUR2"` (e.g., `"Mon..Fri 08:00..18:00"`)
+- `on_calendar`: Mapping with either `shared: <calendar_name>` or `string: "DAY HOUR1..HOUR2"`
 - `allowed_ips`: List of source IP addresses or CIDR ranges allowed to connect
-- `whitelist`: List of destination domains allowed (deny-by-default if present, allow-by-default if empty)
+- `whitelists`: Mapping with optional `list`, `shared`, and `edl` lists
 - `use_tls`: If true, the main `port` is exposed as a TLS Squid listener instead of plain HTTP
 
 ### Advanced: Shared Configurations
@@ -169,13 +173,15 @@ services:
   - name: "Shared Whitelist Example"
     port: 3128
     enabled: true
-    whitelist:
-      - shared.lists.office_sites
-      - shared.lists.dev_tools
+    whitelists:
+      shared:
+        - office_sites
+        - dev_tools
   - name: "Scheduled Example"
     port: 3129
     enabled: true
-    on_calendar: shared.calendars.work_hours
+    on_calendar:
+      shared: work_hours
 
 shared:
   calendars:
@@ -194,8 +200,8 @@ shared:
 
 **Precedence**:
 
-1. If whitelist is defined: only whitelisted domains are allowed, everything else is denied (deny-by-default)
-2. If no whitelist: all domains from allowed_ips are allowed (allow-by-default)
+1. If the `whitelists` key is present: only whitelisted domains are allowed, everything else is denied (deny-by-default)
+2. If no `whitelists`: all domains from allowed_ips are allowed (allow-by-default)
 3. Source IP restrictions apply to all traffic
 
 **Example**: Restrictive policy (whitelist + IP restrictions)
@@ -207,10 +213,11 @@ shared:
   enabled: true
   allowed_ips:
     - 192.168.1.0/24   # Only office network
-  whitelist:
-    - .company.com
-    - .github.com
-    - .npm.org
+  whitelists:
+    list:
+      - .company.com
+      - .github.com
+      - .npm.org
 
 Clients can then connect to the Squid proxy over TLS on `port` using the same
 certificate pair stored in `/etc/polysquid/certs/` and mounted for the
@@ -218,16 +225,17 @@ self-service HTTPS portal. This adds a
 TLS-protected proxy endpoint; it does not enable SSL bump or HTTPS interception.
 ```
 
-**Example**: Permissive with blocklist
+**Example**: Allowlist for general browsing
 
 ```yaml
 - name: "General Proxy"
   port: 3129
   enabled: true
   allowed_ips: ["0.0.0.0/0"]  # Any source (default if omitted)
-  whitelist:
-    - .trusted.com
-    - .example.org
+  whitelists:
+    list:
+      - .trusted.com
+      - .example.org
 ```
 
 ## Usage
@@ -278,7 +286,7 @@ sudo journalctl -u polysquid-example.service
 
 ### Timer Scheduling
 
-Services with `on_calendar` defined have start/stop timers:
+Services with `on_calendar` present are timer-managed and do not become always-on services:
 
 ```bash
 # View timer status
@@ -349,10 +357,14 @@ polysquid/
 The `on_calendar` field uses systemd calendar syntax:
 
 ```yaml
-on_calendar: "Mon..Fri 08:00..18:00"       # Weekdays 8am-6pm
-on_calendar: "Mon..Fri 08:00..12:00, 13:00..18:00"  # Split schedule (with lunch break)
-on_calendar: "Sat 09:00..17:00"            # Saturdays only
-on_calendar: "00:00..23:59:59"             # Every day (equivalent to no scheduling)
+on_calendar:
+  string: "Mon..Fri 08:00..18:00"       # Weekdays 8am-6pm
+on_calendar:
+  string: "Mon..Fri 08:00..12:00, 13:00..18:00"  # Split schedule (with lunch break)
+on_calendar:
+  string: "Sat 09:00..17:00"            # Saturdays only
+on_calendar:
+  string: "00:00..23:59:59"             # Every day (equivalent to no scheduling)
 ```
 
 **Behavior**: Services automatically start at the first time and stop at the second time.
@@ -393,10 +405,58 @@ Example:
 ```yaml
 - name: "Strict Corporate"
   port: 3128
-  whitelist:
-    - .github.com        # Matches github.com and all subdomains
-    - .npm.org
-    - localhost          # Exact match
+  whitelists:
+    list:
+      - .github.com        # Matches github.com and all subdomains
+      - .npm.org
+      - localhost          # Exact match
+```
+
+### External Data Lists (EDL)
+
+Whitelists can be populated from external URLs (e.g., EDLManager, blocklists, or custom APIs). EDL entries are fetched during each reconciliation and merged into the whitelist.
+
+**Format**: Use the structured `whitelists` mapping:
+
+```yaml
+- name: "EDL-Managed Proxy"
+  port: 3128
+  whitelists:
+    list:
+      - .internal.example.com
+    shared:
+      - office_sites
+      - dev_tools
+    edl:
+      - https://api.edlmanager.com/v1/list/abc123/
+      - https://blocklist.example.org/whitelist.txt
+```
+
+This structured `whitelists` format is the only supported whitelist format.
+
+**Requirements**:
+
+- URL must be accessible from the polysquid server
+- Response format: plaintext (one domain per line, comments with `#`, blank lines ignored)
+- Domains are automatically normalized (leading dot added for subdomain matching)
+- No authentication supported (connect to services with public endpoints or use a gateway)
+
+**Caching**:
+
+- EDL lists are cached during a single reconciliation run to avoid redundant fetches
+- Cache is cleared at the start of each new reconcile, so lists are always fresh
+- If a fetch fails, the affected service remains deny-by-default for destinations and an error is logged
+
+**Example EDL response** (plaintext):
+
+```text
+# Example EDL response
+.example.com
+.trusted.org
+github.io
+# Comments and blank lines are ignored
+
+.npm.org
 ```
 
 ### Performance Considerations
@@ -406,6 +466,7 @@ Example:
 - Logs are compressed and rotated daily (30-day retention by default)
 - Systemd timers have 1-second accuracy; use for scheduling, not precise timing
 - Git polling every 5 minutes is configurable in timer but recommended minimum is 1 minute
+- EDL fetches happen during reconciliation; network timeouts are 10 seconds per URL
 
 ### Security Considerations
 
@@ -521,7 +582,7 @@ A Flask-based web portal that allows users to request temporary network access. 
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### Directory Structure
+### Self-Service Directory Structure
 
 ```text
 self-service/
@@ -534,7 +595,7 @@ self-service/
 ├── install.sh              # Install/build/enable/start the self-service stack
 ├── uninstall.sh            # Disable/remove installed units and containers
 ├── build.sh                # Helper for manual build/start/stop/log workflows
-├── whitelist-manager.py    # Helper to read request files
+├── whitelist-manager.py    # Standalone helper to inspect request files
 ├── polysquid-webapp.service         # systemd unit template (Flask app)
 ├── polysquid-nginx.service          # systemd unit template (HTTPS proxy)
 ├── nginx/
@@ -605,12 +666,12 @@ The Flask app writes request files to `self-service/requests/` (commonly `/opt/p
 }
 ```
 
-Self-service deployment is handled separately by `self-service/install.sh` and uses `polysquid-webapp.service` plus `polysquid-nginx.service`. `whitelist-manager.py` is available as a standalone helper to inspect and generate ACL entries from active requests.
+Self-service deployment is handled separately by `self-service/install.sh` and uses `polysquid-webapp.service` plus `polysquid-nginx.service`. `whitelist-manager.py` is available as a standalone helper to inspect active requests and generate an example ACL snippet for diagnostics.
 
 ### API Endpoints
 
 | Method | Path | Description |
-|--------|------|-------------|
+| ------ | ---- | ----------- |
 | `GET` | `/` | Serves the web portal form |
 | `POST` | `/api/request` | Submit a whitelist request |
 | `GET` | `/health` | Health check |
@@ -638,7 +699,7 @@ Self-service deployment is handled separately by `self-service/install.sh` and u
 ### Environment Variables
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+| -------- | ------- | ----------- |
 | `REQUESTS_DIR` | `/shared/requests` | Path to requests directory |
 | `REQUEST_PORT` | `5000` | Flask port |
 | `LOG_LEVEL` | `INFO` | Logging level |

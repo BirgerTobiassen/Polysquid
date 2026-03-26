@@ -3,28 +3,32 @@ services:
   port: 3129 # Port number to listen on
   use_tls: false  # Optional: Use TLS on this proxy listener (https_port)
   enabled: true  # Set to true to enable this service
-  on_calendar: "Mon..Fri 08:00..21:00"  # Optional: systemd OnCalendar format for start/stop timers (e.g., "Mon..Fri 08:00..18:00" for weekdays 8am-6pm)
+  on_calendar:  # Optional: systemd OnCalendar format for start/stop timers
+    string: "Mon..Fri 08:00..21:00"
   allowed_ips:  # Optional: List of source IPs/CIDRs allowed to connect (default: all IPs allowed)
     - 192.168.1.0/24
     - 10.0.0.1
-  whitelist:  # Optional: List of destination domains allowed. If omitted, all destinations are allowed.
-    - .example.com
-    - .trusted.org
+  whitelists:  # Optional: Destination domains allowed. If omitted, all destinations are allowed.
+    list:
+      - .example.com
+      - .trusted.org
 
 - name: "TEST2"
   port: 3130
   use_tls: true
   enabled: true
-  whitelist:
-    - shared.lists.whitelist1
-    - shared.lists.whitelist2
-    - shared.lists.fremover_list
+  whitelists:
+    shared:
+      - whitelist1
+      - whitelist2
+      - fremover_list
 
 - name: "TEST3"
   port: 3131
   use_tls: false
   enabled: true
-  on_calendar: shared.calendars.off_hours
+  on_calendar:
+    shared: off_hours
 
 - name: "TEST_GUL"
   port: 3132
@@ -41,6 +45,20 @@ services:
   allowed_ips:
     - 129.242.32.227
     - 10.227.0.0/16
+
+- name: "EDL_TEST"
+  port: 3134
+  use_tls: true
+  enabled: true
+  on_calendar:
+    shared: work_hours
+  whitelists:
+    list:
+      - .internal.example.com                # Literal domain (exact)
+    shared:
+      - whitelist2                           # Reference to shared list
+    edl:
+      - https://engine.edlmanager.com/v1/11b0bb2c-9795-47d9-94c1-54aa4d6e446e/  # External Data List (plaintext URL)
 
 
 shared:

@@ -10,6 +10,9 @@ service:
   allowed_ips:                     # Base IPs allowed (request IPs merged in dynamically)
     - 192.168.1.0/24
     - 10.0.0.1
-  whitelist:                       # Destination domains allowed
-    - .example.com
-    - .trusted.org
+  on_calendar:
+    shared: work_hours
+  whitelists:                      # Destination domains allowed
+    list:
+      - .example.com
+      - .trusted.org
