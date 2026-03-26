@@ -1,0 +1,15 @@
+# Self-Service Portal Proxy Configuration
+# This proxy handles dynamic IP whitelisting for temporary network access requests.
+# Active request IPs are automatically merged into allowed_ips from request files in the requests/ directory.
+
+service:
+  name: "Self service"
+  port: 3128
+  use_tls: true                    # TLS listener for proxy access
+  enabled: true
+  allowed_ips:                     # Base IPs allowed (request IPs merged in dynamically)
+    - 192.168.1.0/24
+    - 10.0.0.1
+  whitelist:                       # Destination domains allowed
+    - .example.com
+    - .trusted.org

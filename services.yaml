@@ -1,15 +1,4 @@
 services:
-- name: "Self service"
-  port: 3128 # Port number to listen on
-  use_tls: true  # Optional: Use TLS on this proxy listener (https_port)
-  enabled: true  # Set to true to enable this service
-  allowed_ips:  # Optional: List of source IPs/CIDRs allowed to connect (default: all IPs allowed)
-    - 192.168.1.0/24
-    - 10.0.0.1
-  whitelist:  # Optional: List of destination domains allowed (deny-by-default)
-    - .example.com
-    - .trusted.org
-
 - name: "TEST1"
   port: 3129 # Port number to listen on
   use_tls: false  # Optional: Use TLS on this proxy listener (https_port)

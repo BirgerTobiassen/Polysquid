@@ -1,6 +1,9 @@
-# Ignore generated Squid client directories
-squid-clients/*
-!squid-clients/example/
+# Ignore generated proxy service directories
+polysquid-services/*
+!polysquid-services/example/
+
+# Ignore self-service request JSON files (dynamic, not tracked)
+self-service/requests/
 
 # Python cache
 __pycache__/
