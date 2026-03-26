@@ -50,8 +50,6 @@ services:
   port: 3134
   use_tls: true
   enabled: true
-  on_calendar:
-    shared: work_hours
   whitelists:
     list:
       - .internal.example.com                # Literal domain (exact)
